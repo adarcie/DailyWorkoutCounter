@@ -5,26 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Workout Rep Counter</title>
   <style>
-    :root{--bg:#0f172a;--card:#0b1220;--muted:#94a3b8;--accent:#7dd3fc}
-    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial;background:linear-gradient(180deg,#071024 0%, #071a2a 100%);color:#e6eef8}
-    .wrap{max-width:880px;margin:40px auto;padding:24px}
-    .card{background:rgba(255,255,255,0.02);padding:18px;border-radius:12px;box-shadow:0 6px 24px rgba(2,6,23,0.6);}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
-    h1{margin:0;font-size:20px}
+    :root{
+      --bg:#020617;
+      --card:#020617;
+      --muted:#94a3b8;
+      --red:#ef4444;
+      --green:#22c55e;
+      --accent:#38bdf8;
+    }
+    html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,Inter,system-ui,Arial;background:linear-gradient(180deg,#020617 0%, #020617 100%);color:#e5e7eb}
+    .wrap{max-width:420px;margin:0 auto;padding:16px}
+    .card{background:transparent;padding:8px;border-radius:16px}
+    header{display:flex;align-items:center;justify-content:center;margin:8px 0 16px}
+    h1{margin:0;font-size:18px;font-weight:700}
     .tabs{display:flex;gap:8px;margin-bottom:16px}
-    .tab{padding:8px 14px;border-radius:8px;background:transparent;border:1px solid transparent;cursor:pointer}
-    .tab.active{background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.04)}
-    .big{font-size:48px;font-weight:700;margin:8px 0}
-    .muted{color:var(--muted);font-size:14px}
-    .btn{padding:10px 14px;border-radius:8px;border:none;background:var(--accent);color:#042028;cursor:pointer;font-weight:600}
-    .controls{display:flex;gap:8px;margin-top:12px}
+    .tab{flex:1;padding:12px 8px;border-radius:12px;border:none;font-weight:700;font-size:14px;cursor:pointer}
+    .tab.done{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tab.todo{background:rgba(239,68,68,0.15);color:var(--red)}
+    .tab.active{outline:2px solid rgba(255,255,255,0.15)}
+    .big{font-size:44px;font-weight:800;margin:4px 0}
+    .muted{color:var(--muted);font-size:13px}
+    .btn{flex:1;padding:14px 0;border-radius:14px;border:none;background:var(--accent);color:#022c3a;cursor:pointer;font-weight:800;font-size:16px}
+    .controls{display:flex;gap:8px;margin-top:16px}
     .danger{background:rgba(255,255,255,0.06);color:var(--muted)}
-    .debug-panel{margin-top:12px;background:rgba(255,255,255,0.02);padding:10px;border-radius:8px}
+    .debug-panel{margin-top:14px;background:rgba(255,255,255,0.03);padding:12px;border-radius:14px}
     .small{font-size:13px}
-    footer{margin-top:18px;color:var(--muted);font-size:13px}
-    .kbd{padding:4px 8px;background:rgba(255,255,255,0.02);border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
-    .row{display:flex;align-items:center;gap:12px}
-    input[type=number]{width:80px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit}
+    footer{display:none}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
     .micro{font-size:12px;color:var(--muted)}
   </style>
 </head>
@@ -32,8 +39,7 @@
 <div class="wrap">
   <div class="card">
     <header>
-      <h1>Workout Rep Counter</h1>
-      <div class="muted small">Day increments at local midnight • Persistent in browser</div>
+      <h1>Workout</h1>
     </header>
 
     <!-- Tabs -->
@@ -42,9 +48,7 @@
     <!-- content -->
     <div id="content"></div>
 
-    <footer>
-      To deploy: drop this file as <span class="kbd">index.html</span> to the root of a GitHub Pages branch (main/gh-pages).
-    </footer>
+    
   </div>
 </div>
 
@@ -161,6 +165,22 @@ const contentEl = document.getElementById('content');
 let activeIndex = 0;
 
 function makeTabs(){
+  tabsEl.innerHTML = '';
+  const day = getCurrentDay();
+  for(let i=0;i<EXERCISES.length;i++){
+    const st = syncExercise(i, day);
+    const btn = document.createElement('button');
+    const done = clampNonNegative(st.pending) === 0;
+    btn.className = 'tab ' + (done ? 'done' : 'todo') + (i===activeIndex? ' active':'');
+    btn.textContent = EXERCISES[i].name;
+    btn.onclick = () => { activeIndex = i; render(); };
+    tabsEl.appendChild(btn);
+  }
+}
+
+function clampNonNegative(n){ return Math.max(0, Math.floor(n || 0)); }
+
+function render(){
   tabsEl.innerHTML = '';
   EXERCISES.forEach((ex,i)=>{
     const btn = document.createElement('button');
