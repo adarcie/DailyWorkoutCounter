@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workout Rep Counter</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0b1220;--muted:#94a3b8;--accent:#7dd3fc}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial;background:linear-gradient(180deg,#071024 0%, #071a2a 100%);color:#e6eef8}
+    .wrap{max-width:880px;margin:40px auto;padding:24px}
+    .card{background:rgba(255,255,255,0.02);padding:18px;border-radius:12px;box-shadow:0 6px 24px rgba(2,6,23,0.6);}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{margin:0;font-size:20px}
+    .tabs{display:flex;gap:8px;margin-bottom:16px}
+    .tab{padding:8px 14px;border-radius:8px;background:transparent;border:1px solid transparent;cursor:pointer}
+    .tab.active{background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.04)}
+    .big{font-size:48px;font-weight:700;margin:8px 0}
+    .muted{color:var(--muted);font-size:14px}
+    .btn{padding:10px 14px;border-radius:8px;border:none;background:var(--accent);color:#042028;cursor:pointer;font-weight:600}
+    .controls{display:flex;gap:8px;margin-top:12px}
+    .danger{background:rgba(255,255,255,0.06);color:var(--muted)}
+    .debug-panel{margin-top:12px;background:rgba(255,255,255,0.02);padding:10px;border-radius:8px}
+    .small{font-size:13px}
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+    .kbd{padding:4px 8px;background:rgba(255,255,255,0.02);border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+    .row{display:flex;align-items:center;gap:12px}
+    input[type=number]{width:80px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit}
+    .micro{font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <header>
+      <h1>Workout Rep Counter</h1>
+      <div class="muted small">Day increments at local midnight • Persistent in browser</div>
+    </header>
+
+    <!-- Tabs -->
+    <div id="tabs" class="tabs"></div>
+
+    <!-- content -->
+    <div id="content"></div>
+
+    <footer>
+      To deploy: drop this file as <span class="kbd">index.html</span> to the root of a GitHub Pages branch (main/gh-pages).
+    </footer>
+  </div>
+</div>
+
+<script>
+/*
+  Workout Rep Counter
+  - Configurable exercises (EXERCISES array) and cycle length
+  - Base reps formula: baseStart + Math.ceil(day / cycleLength)
+  - Missed reps are carried forward to the next occurrence of the same exercise
+  - Persistent data stored in localStorage per-exercise
+  - Debug panel per exercise (reset / increment day / add reps)
+
+  How it works (storage model):
+  - startDate: cycle start date (stored as YYYY-MM-DD local date)
+  - manualOffset: integer to manually add to day (debug increment day)
+  - For each exercise i: store JSON { pending: number, lastSyncDay: number }
+    - On load we compute currentDay from startDate and manualOffset
+    - For each day from lastSyncDay+1 to currentDay inclusive we "process" that day: if that day maps to this exercise, we add that day's base reps to pending
+    - This way missed reps accumulate forever until you decrement them with the buttons
+*/
+
+// -------- CONFIG: customize exercises here ----------
+const baseStart = 14; // so day 1 -> 15
+const EXERCISES = [
+  { id: 'situps', name: 'Sit-ups' },
+  { id: 'pushups', name: 'Push-ups' }
+];
+// ----------------------------------------------------
+
+const cycleLength = EXERCISES.length;
+
+// localStorage keys
+const KEY_START = 'rc_startDate';
+const KEY_OFFSET = 'rc_manualOffset';
+const KEY_PREFIX_EX = 'rc_ex_';
+
+function todayLocalISO(){
+  const n = new Date();
+  const y = n.getFullYear();
+  const m = String(n.getMonth()+1).padStart(2,'0');
+  const d = String(n.getDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+
+function parseLocalDate(iso){
+  const [y,m,d] = iso.split('-').map(Number);
+  return new Date(y, m-1, d);
+}
+
+function daysSince(startIso){
+  const start = parseLocalDate(startIso);
+  const today = new Date();
+  const startMid = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diff = Math.floor((todayMid - startMid) / 86400000);
+  return diff;
+}
+
+function loadOrInitStart(){
+  let s = localStorage.getItem(KEY_START);
+  if(!s){ s = todayLocalISO(); localStorage.setItem(KEY_START, s); }
+  return s;
+}
+
+function getManualOffset(){
+  return parseInt(localStorage.getItem(KEY_OFFSET) || '0', 10);
+}
+
+function setManualOffset(v){ localStorage.setItem(KEY_OFFSET, String(v)); }
+
+function getCurrentDay(){
+  const start = loadOrInitStart();
+  const passed = daysSince(start);
+  return passed + 1 + getManualOffset();
+}
+
+function exKey(i){ return KEY_PREFIX_EX + EXERCISES[i].id; }
+
+function loadExercise(i){
+  const raw = localStorage.getItem(exKey(i));
+  if(!raw) return { pending: 0, lastSyncDay: 0 };
+  try { return JSON.parse(raw); } catch(e){ return { pending: 0, lastSyncDay: 0 }; }
+}
+
+function saveExercise(i, state){ localStorage.setItem(exKey(i), JSON.stringify(state)); }
+
+function repsForDay(day){
+  // reps increment every full cycle
+  return baseStart + Math.ceil(day / cycleLength);
+}
+
+function exerciseIndexForDay(day){
+  // day 1 -> index 0, day 2 -> index 1, day 3 -> index 0, ...
+  return ((day - 1) % cycleLength + cycleLength) % cycleLength;
+}
+
+// Sync pending counts by processing days from lastSyncDay+1 to currentDay
+function syncExercise(i, currentDay){
+  const st = loadExercise(i);
+  if(st.lastSyncDay >= currentDay) return st; // nothing to do
+  for(let d = st.lastSyncDay + 1; d <= currentDay; d++){
+    if(exerciseIndexForDay(d) === i){
+      st.pending = (st.pending || 0) + repsForDay(d);
+    }
+  }
+  st.lastSyncDay = currentDay;
+  saveExercise(i, st);
+  return st;
+}
+
+// UI
+const tabsEl = document.getElementById('tabs');
+const contentEl = document.getElementById('content');
+let activeIndex = 0;
+
+function makeTabs(){
+  tabsEl.innerHTML = '';
+  EXERCISES.forEach((ex,i)=>{
+    const btn = document.createElement('button');
+    btn.className = 'tab' + (i===activeIndex? ' active':'');
+    btn.textContent = ex.name;
+    btn.onclick = () => { activeIndex = i; render(); }
+    tabsEl.appendChild(btn);
+  });
+}
+
+function clampNonNegative(n){ return Math.max(0, Math.floor(n || 0)); }
+
+function render(){
+  makeTabs();
+  const day = getCurrentDay();
+  // sync all exercises
+  for(let i=0;i<EXERCISES.length;i++) syncExercise(i, day);
+
+  const state = loadExercise(activeIndex);
+  const pending = clampNonNegative(state.pending);
+  const ex = EXERCISES[activeIndex];
+
+  contentEl.innerHTML = `
+    <div>
+      <div class="muted">Exercise</div>
+      <div class="big">${ex.name}</div>
+      <div class="row"><div class="muted">Current day:</div><div style="font-weight:700">Day ${day}</div></div>
+      <div style="margin-top:8px" class="row"><div class="muted">Reps left:</div><div style="font-size:32px;font-weight:800">${pending}</div></div>
+
+      <div class="controls">
+        <button class="btn" onclick="decrease(${activeIndex},1)">-1</button>
+        <button class="btn" onclick="decrease(${activeIndex},5)">-5</button>
+        <button class="btn" onclick="decrease(${activeIndex},10)">-10</button>
+        <button class="btn danger" onclick="showDebug(${activeIndex})">Debug</button>
+      </div>
+
+      <div id="debug-${activeIndex}" style="display:none" class="debug-panel small">
+        <div class="row"><div class="muted">Debug:</div></div>
+        <div style="margin-top:8px" class="row">
+          <button class="btn danger" onclick="debugReset(${activeIndex})">Reset (start today, clear counts)</button>
+          <button class="btn" onclick="debugIncDay(1)">+1 day</button>
+        </div>
+        <div style="margin-top:8px" class="row">
+          <button class="btn" onclick="debugAdd(${activeIndex},1)">+1 rep</button>
+          <button class="btn" onclick="debugAdd(${activeIndex},5)">+5 reps</button>
+          <button class="btn" onclick="debugAdd(${activeIndex},10)">+10 reps</button>
+        </div>
+        <div style="margin-top:8px" class="micro">Last sync day: <span id="lastsync-${activeIndex}"></span></div>
+      </div>
+    </div>
+  `;
+
+  // update last sync text
+  const st = loadExercise(activeIndex);
+  const lastSyncEl = document.getElementById(`lastsync-${activeIndex}`);
+  if(lastSyncEl) lastSyncEl.textContent = st.lastSyncDay;
+}
+
+// API functions used in template buttons
+window.decrease = function(i, amount){
+  const st = loadExercise(i);
+  st.pending = clampNonNegative(st.pending - amount);
+  saveExercise(i, st);
+  render();
+}
+
+// Debug controls
+window.showDebug = function(i){
+  const el = document.getElementById(`debug-${i}`);
+  if(!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+window.debugReset = function(i){
+  if(!confirm('Reset start date to today and clear all saved counts for this exercise?')) return;
+  // reset global start date and per-exercise state
+  localStorage.setItem(KEY_START, todayLocalISO());
+  setManualOffset(0);
+  // clear all exercises
+  for(let j=0;j<EXERCISES.length;j++) saveExercise(j, { pending: 0, lastSyncDay: 0 });
+  render();
+}
+
+window.debugIncDay = function(delta){
+  const cur = getManualOffset();
+  setManualOffset(cur + delta);
+  render();
+}
+
+window.debugAdd = function(i, amount){
+  const st = loadExercise(i);
+  st.pending = (st.pending || 0) + amount;
+  saveExercise(i, st);
+  render();
+}
+
+// helper: allow clicking outside to toggle debug panels closed (simple)
+document.addEventListener('click', (ev)=>{
+  // if clicked a debug button leave it
+});
+
+// initialize state and render
+(function init(){
+  // ensure start date exists
+  loadOrInitStart();
+  // ensure exercise storage exists
+  for(let i=0;i<EXERCISES.length;i++){
+    if(!localStorage.getItem(exKey(i))){
+      saveExercise(i, { pending: 0, lastSyncDay: 0 });
+    }
+  }
+
+  // render UI
+  render();
+})();
+
+// Optional: update UI at midnight (set timeout to next midnight to re-render automatically)
+(function scheduleMidnightRefresh(){
+  const now = new Date();
+  const nextMid = new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 0,0,2); // 2 seconds after midnight
+  const ms = nextMid - now;
+  if(ms>0 && ms< 8.64e7){
+    setTimeout(()=>{ render(); scheduleMidnightRefresh(); }, ms);
+  }
+})();
+
+</script>
+</body>
+</html>
